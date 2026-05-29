@@ -1,0 +1,51 @@
+#!/bin/sh
+# ciprof — shell wrapper for the yeet-based build profiler
+#
+# Usage:
+#   ciprof --start                  begin profiling in the background
+#   ciprof --report                 signal daemon to stop and print the report
+#   ciprof --report --json          same but print JSON only
+#   ciprof --report --no-json       suppress embedded JSON sentinel
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PID_FILE=/tmp/ciprof.pid
+STOP_FILE=/tmp/ciprof.stop
+
+case "$1" in
+  --start)
+    # Clean up any stale stop file
+    rm -f "$STOP_FILE"
+    # Pass through any extra args (e.g. --runner-pid) but not --start itself
+    shift
+    yeet run "$SCRIPT_DIR/main.js" --start "$@" &
+    DAEMON_PID=$!
+    echo "$DAEMON_PID" > "$PID_FILE"
+    echo "ciprof: daemon started (PID $DAEMON_PID)"
+    ;;
+
+  --report)
+    if [ ! -f "$PID_FILE" ]; then
+      echo "ciprof: no PID file found at $PID_FILE — was --start run?" >&2
+      exit 1
+    fi
+    DAEMON_PID=$(cat "$PID_FILE")
+    if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
+      echo "ciprof: daemon PID $DAEMON_PID is not running" >&2
+      exit 1
+    fi
+    # Spawn a sentinel process that the daemon polls for by comm name.
+    # The daemon sees 'ciprof-stop' in the proc table and self-stops.
+    (exec -a ciprof-stop sleep 600) &
+    SENTINEL_PID=$!
+    # Wait for daemon to exit (it renders the report to stdout before exiting)
+    wait "$DAEMON_PID" 2>/dev/null || true
+    # Kill sentinel and clean up
+    kill "$SENTINEL_PID" 2>/dev/null || true
+    rm -f "$PID_FILE"
+    ;;
+
+  *)
+    echo "Usage: ciprof --start | --report [--json] [--runner-pid <pid>]"
+    exit 1
+    ;;
+esac

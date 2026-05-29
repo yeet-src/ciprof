@@ -1,0 +1,78 @@
+name: ciprof demo
+
+on:
+  workflow_dispatch:
+    inputs:
+      workload:
+        description: 'Workload to profile'
+        required: false
+        default: 'npm'
+        type: choice
+        options:
+          - npm
+          - pip
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install yeet
+        run: curl -fsSL https://yeet.cx/install.sh | sh -s -- --no-phone-home
+        # Adds yeet to PATH for subsequent steps
+        env:
+          YEET_INSTALL: /usr/local
+
+      - name: Install BPF build deps
+        run: |
+          sudo apt-get install -y libbpf-dev clang linux-tools-common
+          # linux-tools-common installs a wrapper bpftool that looks for
+          # /usr/lib/linux-tools/$(uname -r)/bpftool, which won't exist on
+          # Azure runners since the kernel version doesn't match any apt package.
+          # Find whatever versioned binary did get installed and link it directly.
+          BPFTOOL=$(find /usr/lib/linux-tools -name bpftool -executable 2>/dev/null | head -1)
+          if [ -z "$BPFTOOL" ]; then
+            PKG=$(apt-cache search '^linux-tools-[0-9]' | grep -v lowlatency | grep -v xilinx | grep -v cloud | awk '{print $1}' | head -1)
+            sudo apt-get install -y "$PKG"
+            BPFTOOL=$(find /usr/lib/linux-tools -name bpftool -executable 2>/dev/null | head -1)
+          fi
+          sudo ln -sf "$BPFTOOL" /usr/local/bin/bpftool
+          bpftool version
+
+      - name: Start ciprof
+        run: |
+          ID=$(yeet run -d https://github.com/yeet-src/ciprof -- --start | sed 's/\x1b\[[0-9;]*m//g' | grep -oE '[0-9]+')
+          echo "CIPROF_ISOLATE=$ID" >> $GITHUB_ENV
+          echo "ciprof daemon isolate: $ID"
+
+      - uses: actions/checkout@v4
+
+      - if: inputs.workload == 'npm'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - if: inputs.workload == 'npm'
+        name: Create demo package and install deps
+        run: |
+          mkdir demo && cd demo
+          npm init -y
+          # install a moderately-sized dependency tree as the workload
+          npm install express typescript ts-node
+
+      - if: inputs.workload == 'pip'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - if: inputs.workload == 'pip'
+        name: Install pip deps
+        run: pip install numpy pandas scikit-learn
+
+      - name: ciprof report
+        if: always()
+        run: |
+          (exec -a ciprof-stop sleep infinity) &
+          SENTINEL=$!
+          yeet attach $CIPROF_ISOLATE
+          kill $SENTINEL 2>/dev/null || true

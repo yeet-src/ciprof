@@ -1,0 +1,5 @@
+bin/
+include/
+ciprof-report.json
+/tmp/ciprof.pid
+/tmp/ciprof.stop
