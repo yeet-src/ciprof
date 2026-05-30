@@ -1,0 +1,34 @@
+#!/bin/sh
+# Local test for the sentinel-inode stop mechanism.
+# Usage: ./test-local [duration_sec]
+#   duration_sec  optional workload sleep time (default 5)
+# Requires: yeet on PATH, built BPF object (run `make` first), CAP_BPF / root.
+set -e
+set -x
+
+WORKLOAD_SEC="${1:-5}"
+
+make
+
+SENTINEL=$(mktemp /tmp/ciprof-sentinel.XXXXXX)
+SENTINEL_INO=$(stat -c '%i' "$SENTINEL")
+echo "sentinel: $SENTINEL  inode: $SENTINEL_INO"
+
+yeet run -T ./main.js -- --start --sentinel-inode "$SENTINEL_INO" > ciprof.log 2>&1 &
+CIPROF_PID=$!
+echo "ciprof PID: $CIPROF_PID"
+
+# Give the BPF probes a moment to load before the workload starts
+sleep 2
+
+echo "running workload for ${WORKLOAD_SEC}s..."
+sleep "$WORKLOAD_SEC"
+
+echo "deleting sentinel to trigger report..."
+rm -f "$SENTINEL"
+
+echo "waiting for ciprof to exit..."
+while kill -0 "$CIPROF_PID" 2>/dev/null; do sleep 1; done
+
+echo ""
+cat ciprof.log

@@ -3,8 +3,12 @@ import { RingBuf } from 'yeet:bpf';
 import { ingestEvent, setRunnerPid, getReport } from './state.js';
 import { renderTerminal, renderJson } from './report.js';
 
+const EV_UNLINK = 5;
+
 const args = yeet.args;
 const startMs = Date.now();
+
+let sentinelStopCb = null;
 
 // ─── Runner PID detection ─────────────────────────────────────────────────────
 
@@ -49,6 +53,14 @@ async function detectRunnerPid() {
 // ─── Event handler ────────────────────────────────────────────────────────────
 
 function onEvent(raw) {
+    if (raw.event?.type === EV_UNLINK) {
+        if (sentinelStopCb && String(raw.event.ino) === String(args.sentinel_inode)) {
+            const cb = sentinelStopCb;
+            sentinelStopCb = null;
+            cb();
+        }
+        return;
+    }
     try {
         ingestEvent(raw);
     } catch (e) {
@@ -69,33 +81,21 @@ function emitReport() {
 
 // ─── Stop detection ──────────────────────────────────────────────────────────
 //
-// yeet scripts can't read files, so we detect stop via the process table.
-// The shell wrapper creates a sentinel: `sh -c 'exec -a ciprof-stop sleep 600'`
-// in background before doing `wait $DAEMON_PID`. We poll for that comm.
+// Pass --sentinel-inode <ino> (the inode of a file you create before starting).
+// Delete that file to trigger the report. The BPF unlink probe fires an
+// EV_UNLINK event which onEvent() catches and routes here.
 //
-// For --duration mode (testing), we just use a setTimeout instead.
+// For --duration mode (local testing without a sentinel file), a setTimeout
+// fires instead.
 
 async function watchForStop(onStop) {
     const durationSec = args.duration ? Number(args.duration) : 0;
-
     if (durationSec > 0) {
         setTimeout(onStop, durationSec * 1000);
         return;
     }
-
-    // Poll process table for sentinel process named 'ciprof-stop'
-    const interval = setInterval(async () => {
-        const { data } = await yeet.graph.query(`{
-            procs { pid cmdline }
-        }`).catch(() => ({ data: null }));
-
-        if (!data?.procs) return;
-        const found = data.procs.some(p => p.cmdline?.[0] === 'ciprof-stop');
-        if (found) {
-            clearInterval(interval);
-            onStop();
-        }
-    }, 500);
+    sentinelStopCb = onStop;
+    console.warn(`ciprof: waiting for sentinel inode ${args.sentinel_inode} to be unlinked`);
 }
 
 // ─── --start mode ────────────────────────────────────────────────────────────

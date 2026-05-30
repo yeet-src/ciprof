@@ -42,7 +42,10 @@ jobs:
       - name: Start ciprof
         run: |
           set -x
-          yeet run -T https://github.com/yeet-src/ciprof -- --start > ciprof.log 2>&1 &
+          SENTINEL=$(mktemp)
+          SENTINEL_INO=$(stat -c '%i' "$SENTINEL")
+          echo "SENTINEL=$SENTINEL" >> $GITHUB_ENV
+          yeet run -T https://github.com/yeet-src/ciprof -- --start --sentinel-inode "$SENTINEL_INO" > ciprof.log 2>&1 &
           echo "CIPROF_PID=$!" >> $GITHUB_ENV
 
       - uses: actions/checkout@v4
@@ -73,8 +76,6 @@ jobs:
         if: always()
         run: |
           set -x
-          (exec -a ciprof-stop sleep 600) &
-          SENTINEL=$!
+          rm -f "$SENTINEL"
           while kill -0 "$CIPROF_PID" 2>/dev/null; do sleep 1; done
-          kill $SENTINEL 2>/dev/null || true
           cat ciprof.log

@@ -10,6 +10,7 @@ enum event_type {
     EV_EXIT    = 2,
     EV_CONNECT = 3,
     EV_CLOSE   = 4,
+    EV_UNLINK  = 5,
 };
 
 struct event {
@@ -27,6 +28,8 @@ struct event {
     __u64 bytes_sent;
     __u64 bytes_received;
     __s32 exit_code;
+    __u32 _pad2;
+    __u64 ino;
 };
 
 // Forces struct event into BTF for yeet's decoder.
@@ -221,6 +224,25 @@ int BPF_PROG(on_tcp_close, struct sock *sk, long timeout)
     e->bytes_received = BPF_CORE_READ(tp, bytes_received);
 
     bpf_get_current_comm(e->comm, sizeof(e->comm));
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+// ─── sentinel unlink ─────────────────────────────────────────────────────────
+// security_inode_unlink has a stable (dir, dentry) signature across all kernel
+// versions — unlike vfs_unlink, which gained a mnt_userns/mnt_idmap arg in 5.12
+// and 6.3 respectively.
+
+SEC("fentry/security_inode_unlink")
+int BPF_PROG(on_unlink, struct inode *dir, struct dentry *dentry)
+{
+    struct inode *inode = BPF_CORE_READ(dentry, d_inode);
+    if (!inode) return 0;
+
+    struct event *e = reserve();
+    if (!e) return 0;
+    e->type = EV_UNLINK;
+    e->ino  = BPF_CORE_READ(inode, i_ino);
     bpf_ringbuf_submit(e, 0);
     return 0;
 }
