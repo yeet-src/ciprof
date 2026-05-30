@@ -74,5 +74,5 @@ jobs:
         run: |
           (exec -a ciprof-stop sleep infinity) &
           SENTINEL=$!
-          yeet attach $CIPROF_ISOLATE
+          script -q -e -c "yeet attach $CIPROF_ISOLATE" /dev/null
           kill $SENTINEL 2>/dev/null || true

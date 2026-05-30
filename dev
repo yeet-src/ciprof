@@ -1,0 +1,21 @@
+#!/bin/sh
+# Usage: ./dev [npm|pip]
+set -e
+
+REPO="yeet-src/ciprof"
+WORKLOAD="${1:-npm}"
+
+git add -A
+if git diff --cached --quiet; then
+  echo "nothing to commit, pushing as-is"
+else
+  git commit -m "wip"
+fi
+
+git push -f origin master
+
+gh workflow run demo.yml -R "$REPO" -f workload="$WORKLOAD"
+
+sleep 3
+
+gh run watch -R "$REPO" --exit-status
