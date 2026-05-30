@@ -75,6 +75,6 @@ jobs:
           set -x
           (exec -a ciprof-stop sleep 600) &
           SENTINEL=$!
-          wait $CIPROF_PID
+          while kill -0 "$CIPROF_PID" 2>/dev/null; do sleep 1; done
           kill $SENTINEL 2>/dev/null || true
           cat ciprof.log
