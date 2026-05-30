@@ -11,21 +11,38 @@ const startMs = Date.now();
 async function detectRunnerPid() {
     if (args.runner_pid) return Number(args.runner_pid);
 
-    // Walk procs to find a process named Runner.Worker or actions/runner
-    const { data, errors } = await yeet.graph.query(`{
-        procs { pid status { name ppid } }
+    const { data } = await yeet.graph.query(`{
+        procs { pid cmdline status { name } }
     }`).catch(() => ({ data: null }));
 
     if (data?.procs) {
         for (const p of data.procs) {
-            const name = p.status?.name || '';
-            if (name === 'Runner.Worker' || name === 'runner' || name === 'Runner.Listener') {
+            const name    = p.status?.name || '';
+            const cmd0    = p.cmdline?.[0] || '';
+            const cmdline = (p.cmdline || []).join(' ');
+            if (
+                name === 'Runner.Worker'   || name === 'Runner.Listener' ||
+                cmd0 === 'Runner.Worker'   || cmd0 === 'Runner.Listener' ||
+                cmdline.includes('Runner.Worker') ||
+                cmdline.includes('actions/runner') ||
+                cmdline.includes('github/runner')
+            ) {
+                console.warn(`ciprof: runner PID ${p.pid} (${name || cmd0})`);
                 return p.pid;
             }
         }
     }
 
-    console.warn('ciprof: could not detect runner PID — step attribution disabled');
+    // Log running processes so we can tune detection
+    if (data?.procs) {
+        const names = data.procs
+            .map(p => p.status?.name || p.cmdline?.[0] || '?')
+            .filter((n, i, a) => a.indexOf(n) === i)
+            .sort()
+            .join(', ');
+        console.warn(`ciprof: procs visible: ${names}`);
+    }
+    console.warn('ciprof: runner PID not found — attributing all events to a single job step');
     return null;
 }
 

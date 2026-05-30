@@ -79,6 +79,9 @@ export function ingestEvent(raw) {
                 stepOf.set(pid, parentStep);
             } else if (currentStepIdx >= 0) {
                 stepOf.set(pid, currentStepIdx);
+            } else if (runnerPid === null) {
+                // No runner PID — open a catch-all step on the first exec we see
+                openStep(pid, comm, argv);
             }
         }
 
