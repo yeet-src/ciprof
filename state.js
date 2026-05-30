@@ -228,16 +228,51 @@ export function getReport(startMs) {
         }
     }
 
-    const reportSteps = steps.map(s => ({
-        index: s.index,
-        rootComm: s.rootComm,
-        rootArgv: s.rootArgv,
-        wallMs: (s.endMs || endMs) - s.startMs,
-        procCount: s.procCount,
-        netBytesDown: s.netBytesDown,
-        netBytesUp: s.netBytesUp,
-        topDests: [...s._dests].slice(0, 5),
-    }));
+    // Per-step top comms
+    const stepCommCounts = new Map(); // stepIdx -> Map(comm -> count)
+    for (const [pid, p] of procs) {
+        const stepIdx = stepOf.get(pid);
+        if (stepIdx === undefined) continue;
+        if (!stepCommCounts.has(stepIdx)) stepCommCounts.set(stepIdx, new Map());
+        const cm = stepCommCounts.get(stepIdx);
+        cm.set(p.comm, (cm.get(p.comm) || 0) + 1);
+    }
+
+    const reportSteps = steps.map((s, i) => {
+        const wallMs = (s.endMs || endMs) - s.startMs;
+        // Estimated network time: assume 100 MB/s sustained download
+        const estNetMs = s.netBytesDown / (100 * 1024 * 1024 / 1000);
+        const netPct = wallMs > 0 ? Math.min(99, Math.round(estNetMs / wallMs * 100)) : 0;
+
+        const topComms = [...(stepCommCounts.get(i) || new Map()).entries()]
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5)
+            .map(([comm, count]) => ({ comm, count }));
+
+        const topDests = [...destStats.entries()]
+            .filter(([, ds]) => ds.steps.has(s.index))
+            .sort((a, b) => b[1].bytesDown - a[1].bytesDown)
+            .slice(0, 3)
+            .map(([dest, ds]) => ({
+                dest,
+                bytesDown: ds.bytesDown,
+                bytesUp: ds.bytesUp,
+                connCount: ds.conns,
+            }));
+
+        return {
+            index: s.index,
+            rootComm: s.rootComm,
+            rootArgv: s.rootArgv,
+            wallMs,
+            procCount: s.procCount,
+            netBytesDown: s.netBytesDown,
+            netBytesUp: s.netBytesUp,
+            netPct,
+            topComms,
+            topDests,
+        };
+    });
 
     const network = [...destStats.entries()]
         .sort((a, b) => b[1].bytesDown - a[1].bytesDown)

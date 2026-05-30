@@ -1,136 +1,113 @@
 import { formatBytes, formatDuration, formatNumber } from './format.js';
 
-const COL_WIDTH = 68;
+const BAR_WIDTH = 22;
 
-function pad(str, width, char = ' ') {
-    const plain = stripAnsi(str);
-    const extra = str.length - plain.length; // ansi bytes don't count toward visual width
-    const needed = width - plain.length;
-    if (needed <= 0) return str;
-    return str + char.repeat(needed);
+function stripAnsi(s) {
+    return s.replace(/\x1b\[[0-9;]*m/g, '');
 }
 
-function stripAnsi(str) {
-    // Rough: remove ESC sequences
-    return str.replace(/\x1b\[[0-9;]*m/g, '');
+function rpad(s, w) {
+    const len = stripAnsi(s).length;
+    return len >= w ? s : s + ' '.repeat(w - len);
 }
 
-function rpad(str, width) {
-    return pad(str, width);
+function lpad(s, w) {
+    const len = stripAnsi(s).length;
+    return len >= w ? s : ' '.repeat(w - len) + s;
 }
 
-function lpad(str, width) {
-    const plain = stripAnsi(str);
-    const needed = width - plain.length;
-    if (needed <= 0) return str;
-    return ' '.repeat(needed) + str;
+function bar(pct) {
+    const filled = Math.round(pct / 100 * BAR_WIDTH);
+    const empty  = BAR_WIDTH - filled;
+    return style.cyan('█'.repeat(filled)) + style.dim('░'.repeat(empty));
+}
+
+function netEstLabel(pct) {
+    if (pct === 0)  return style.dim('no network activity');
+    if (pct < 10)   return style.green(`net ~${pct}%`);
+    if (pct < 50)   return style.yellow(`net ~${pct}%`);
+    return style.red(`net ~${pct}%`);
 }
 
 export function renderTerminal(report) {
     const lines = [];
 
     const totalStr = formatDuration(report.meta.totalMs);
-    const header = `  ciprof  ·  ubuntu-latest  ·  total ${totalStr}  `;
-    const border = '═'.repeat(Math.max(header.length, 66));
+    const title = `  ciprof  ·  ubuntu-latest  ·  total ${totalStr}  `;
+    const W = Math.max(title.length, 68);
+    const rule = '═'.repeat(W);
 
-    lines.push(style.cyan('╔' + border + '╗'));
-    lines.push(style.cyan('║') + style.bold(header.padEnd(border.length)) + style.cyan('║'));
-    lines.push(style.cyan('╚' + border + '╝'));
+    lines.push(style.cyan(`╔${rule}╗`));
+    lines.push(style.cyan('║') + style.bold(title.padEnd(W)) + style.cyan('║'));
+    lines.push(style.cyan(`╚${rule}╝`));
     lines.push('');
 
-    // ─── STEPS ───────────────────────────────────────────────────────────────
-    lines.push(style.bold('STEPS'));
-    const sepLine = '  ' + '─'.repeat(border.length - 2);
-    lines.push(style.dim(sepLine));
-
-    const HDR_NAME  = 46;
-    const HDR_WALL  = 8;
-    const HDR_PROCS = 7;
-    lines.push(
-        '  ' +
-        rpad(style.dim(''), HDR_NAME) +
-        lpad(style.dim('wall'), HDR_WALL) + '  ' +
-        lpad(style.dim('procs'), HDR_PROCS) + '  ' +
-        style.dim('net')
-    );
-
     let totalWall = 0, totalProcs = 0, totalNet = 0;
+
     for (const step of report.steps) {
-        const name = step.rootArgv || step.rootComm || `step-${step.index}`;
-        const wall = formatDuration(step.wallMs);
-        const net  = formatBytes(step.netBytesDown + step.netBytesUp);
         totalWall  += step.wallMs;
         totalProcs += step.procCount;
         totalNet   += step.netBytesDown + step.netBytesUp;
 
+        const label = step.rootArgv || step.rootComm || `step-${step.index}`;
+        const wall  = formatDuration(step.wallMs);
+        const net   = formatBytes(step.netBytesDown + step.netBytesUp);
+        const procs = formatNumber(step.procCount);
+
+        // Header row
         lines.push(
             '  ' +
-            rpad(name, HDR_NAME) +
-            lpad(wall, HDR_WALL) + '  ' +
-            lpad(String(step.procCount), HDR_PROCS) + '  ' +
-            net
+            rpad(style.bold(label), 46) + '  ' +
+            lpad(style.dim(wall), 7)    + '  ' +
+            lpad(style.dim(procs + 'p'), 7) + '  ' +
+            style.dim(net)
         );
+
+        // Time-share bar
+        const computePct = 100 - step.netPct;
+        lines.push(
+            `  ${bar(step.netPct)}  ` +
+            netEstLabel(step.netPct) +
+            style.dim(`  /  compute ~${computePct}%`)
+        );
+
+        // Top processes
+        if (step.topComms.length > 0) {
+            const commStr = step.topComms
+                .map(({ comm, count }) => `${style.cyan(comm)}×${formatNumber(count)}`)
+                .join('  ');
+            lines.push(`    ${style.dim('↳ procs')}    ${commStr}`);
+        }
+
+        // Top network destinations
+        for (const d of step.topDests) {
+            const bytes = formatBytes(d.bytesDown);
+            const conns = d.connCount > 1 ? style.dim(`  ${d.connCount} conns`) : '';
+            lines.push(`    ${style.dim('↳ network')}  ${rpad(d.dest, 38)}  ${lpad(bytes, 9)} ↓${conns}`);
+        }
+
+        lines.push('');
     }
 
-    lines.push(style.dim(sepLine));
+    // Summary line
+    const sepLine = '  ' + style.dim('─'.repeat(W - 2));
+    lines.push(sepLine);
     lines.push(
         '  ' +
-        rpad(style.bold('total'), HDR_NAME) +
-        lpad(style.bold(formatDuration(totalWall)), HDR_WALL) + '  ' +
-        lpad(style.bold(String(totalProcs)), HDR_PROCS) + '  ' +
+        rpad(style.bold('total'), 46) + '  ' +
+        lpad(style.bold(formatDuration(totalWall)), 7) + '  ' +
+        lpad(style.bold(formatNumber(totalProcs) + 'p'), 7) + '  ' +
         style.bold(formatBytes(totalNet))
     );
     lines.push('');
 
-    // ─── NETWORK ─────────────────────────────────────────────────────────────
-    if (report.network.length > 0) {
-        lines.push(style.bold('NETWORK') + style.dim('  (top destinations)'));
-        for (const n of report.network) {
-            const dest = rpad(n.dest, 40);
-            const conns = lpad(`${n.connCount} conns`, 10);
-            const down  = lpad(formatBytes(n.bytesDown) + ' ↓', 12);
-            lines.push(`  ${dest} ${conns}  ${down}`);
+    // Observations
+    if (report.observations.length > 0) {
+        for (const obs of report.observations) {
+            const icon = obs.level === 'warn' ? style.yellow('⚠') : style.blue('✓');
+            lines.push(`  ${icon}  ${obs.message}`);
         }
         lines.push('');
-    }
-
-    // ─── PROCESS OVERHEAD ────────────────────────────────────────────────────
-    const { total, medianLifetimeMs, topComms } = report.processes;
-    lines.push(style.bold('PROCESS OVERHEAD'));
-    lines.push(
-        `  ${formatNumber(total)} processes spawned  ·  median lifetime ${medianLifetimeMs} ms`
-    );
-    if (topComms.length) {
-        const spawnerStr = topComms.map(([c, n]) => `${c} (${n})`).join('  ');
-        lines.push(`  top spawners:  ${spawnerStr}`);
-    }
-    lines.push('');
-
-    // ─── OBSERVATIONS ────────────────────────────────────────────────────────
-    if (report.observations.length > 0) {
-        lines.push(style.bold('OBSERVATIONS'));
-        for (const obs of report.observations) {
-            const icon = obs.level === 'warn'
-                ? style.yellow('⚠')
-                : style.blue('✓');
-            const words = obs.message.split(' ');
-            const maxW  = COL_WIDTH - 4;
-            let line = '';
-            const wrapped = [];
-            for (const w of words) {
-                if ((line + ' ' + w).length > maxW) {
-                    wrapped.push(line);
-                    line = w;
-                } else {
-                    line = line ? line + ' ' + w : w;
-                }
-            }
-            if (line) wrapped.push(line);
-            lines.push(`  ${icon}  ${wrapped[0]}`);
-            for (let i = 1; i < wrapped.length; i++) {
-                lines.push(`     ${wrapped[i]}`);
-            }
-        }
     }
 
     return lines.join('\n');
