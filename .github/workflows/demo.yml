@@ -41,9 +41,9 @@ jobs:
 
       - name: Start ciprof
         run: |
-          ID=$(yeet run -d https://github.com/yeet-src/ciprof -- --start | sed 's/\x1b\[[0-9;]*m//g' | grep -oE '[0-9]+')
-          echo "CIPROF_ISOLATE=$ID" >> $GITHUB_ENV
-          echo "ciprof daemon isolate: $ID"
+          set -x
+          yeet run -T https://github.com/yeet-src/ciprof -- --start > ciprof.log 2>&1 &
+          echo "CIPROF_PID=$!" >> $GITHUB_ENV
 
       - uses: actions/checkout@v4
 
@@ -72,7 +72,9 @@ jobs:
       - name: ciprof report
         if: always()
         run: |
-          (exec -a ciprof-stop sleep infinity) &
+          set -x
+          (exec -a ciprof-stop sleep 600) &
           SENTINEL=$!
-          script -q -e -c "yeet attach $CIPROF_ISOLATE" /dev/null
+          wait $CIPROF_PID
           kill $SENTINEL 2>/dev/null || true
+          cat ciprof.log
