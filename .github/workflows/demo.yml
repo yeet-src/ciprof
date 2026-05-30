@@ -6,9 +6,10 @@ on:
       workload:
         description: 'Workload to profile'
         required: false
-        default: 'npm'
+        default: 'full'
         type: choice
         options:
+          - full
           - npm
           - pip
 
@@ -19,7 +20,6 @@ jobs:
     steps:
       - name: Install yeet
         run: curl -fsSL https://yeet.cx/install.sh | sh -s -- --no-phone-home
-        # Adds yeet to PATH for subsequent steps
         env:
           YEET_INSTALL: /usr/local
 
@@ -50,27 +50,92 @@ jobs:
 
       - uses: actions/checkout@v4
 
-      - if: inputs.workload == 'npm'
+      # ── Node.js workload ─────────────────────────────────────────────────────
+
+      - if: inputs.workload == 'npm' || inputs.workload == 'full'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - if: inputs.workload == 'npm'
-        name: Create demo package and install deps
+      - if: inputs.workload == 'npm' || inputs.workload == 'full'
+        name: npm install
         run: |
-          mkdir demo && cd demo
+          mkdir -p demo-node && cd demo-node
           npm init -y
-          # install a moderately-sized dependency tree as the workload
-          npm install express typescript ts-node
+          npm install \
+            react react-dom next \
+            typescript @types/react @types/node \
+            eslint @typescript-eslint/parser @typescript-eslint/eslint-plugin \
+            jest ts-jest @types/jest \
+            webpack webpack-cli ts-loader
 
-      - if: inputs.workload == 'pip'
+      - if: inputs.workload == 'npm' || inputs.workload == 'full'
+        name: npm typecheck
+        run: |
+          cd demo-node
+          npx tsc --init --strict --jsx react
+          cat > index.tsx << 'EOF'
+          import React from 'react';
+          interface Props { name: string; count: number; }
+          export function Counter({ name, count }: Props) {
+            return <div>{name}: {count}</div>;
+          }
+          EOF
+          npx tsc --noEmit 2>/dev/null || true
+
+      - if: inputs.workload == 'npm' || inputs.workload == 'full'
+        name: npm test
+        run: |
+          cd demo-node
+          cat > sum.test.ts << 'EOF'
+          const sum = (a: number, b: number) => a + b;
+          test('adds 1 + 2 to equal 3', () => { expect(sum(1, 2)).toBe(3); });
+          test('adds 5 + 5 to equal 10', () => { expect(sum(5, 5)).toBe(10); });
+          EOF
+          npx jest --passWithNoTests 2>/dev/null || true
+
+      # ── Python workload ──────────────────────────────────────────────────────
+
+      - if: inputs.workload == 'pip' || inputs.workload == 'full'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - if: inputs.workload == 'pip'
-        name: Install pip deps
-        run: pip install numpy pandas scikit-learn
+      - if: inputs.workload == 'pip' || inputs.workload == 'full'
+        name: pip install
+        run: pip install numpy pandas scipy scikit-learn matplotlib seaborn
+
+      - if: inputs.workload == 'pip' || inputs.workload == 'full'
+        name: pip train
+        run: |
+          python - << 'EOF'
+          import numpy as np
+          import pandas as pd
+          from sklearn.datasets import fetch_california_housing
+          from sklearn.ensemble import GradientBoostingRegressor
+          from sklearn.model_selection import cross_val_score
+          from sklearn.preprocessing import StandardScaler
+          from sklearn.pipeline import Pipeline
+
+          data = fetch_california_housing()
+          df = pd.DataFrame(data.data, columns=data.feature_names)
+          print(df.describe().to_string())
+
+          pipe = Pipeline([
+              ('scaler', StandardScaler()),
+              ('model', GradientBoostingRegressor(n_estimators=200, max_depth=4)),
+          ])
+          scores = cross_val_score(pipe, data.data, data.target, cv=5, scoring='r2')
+          print(f'\nR² {scores.mean():.3f} ± {scores.std():.3f}')
+          EOF
+
+      - if: inputs.workload == 'pip' || inputs.workload == 'full'
+        name: pip test
+        run: |
+          pip install pytest
+          python -m pytest --co -q 2>/dev/null || echo "no tests collected"
+
+      # ── Report ───────────────────────────────────────────────────────────────
 
       - name: ciprof report
         if: always()
